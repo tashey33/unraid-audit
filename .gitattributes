@@ -1,0 +1,8 @@
+# Keep LF line endings on every platform. Git for Windows would otherwise
+# check text files out with CRLF, which breaks bash scripts (gate.sh,
+# approve.sh, selftest.sh) and changes gate.sh's hash.
+* text=auto eol=lf
+*.sh  text eol=lf
+*.py  text eol=lf
+*.json text eol=lf
+*.md  text eol=lf
