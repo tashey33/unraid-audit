@@ -45,7 +45,7 @@ ENABLE_POWER=0             # powerdown -r (restart) / powerdown (power off)
 # Containers / VMs the owner calls critical: starting, stopping, restarting or
 # changing autostart for these is DANGEROUS (needs approval) instead of CHANGE.
 # Space-separated, e.g. CRITICAL_NAMES=" homeassistant pihole Windows11 "
-CRITICAL_NAMES=" "
+CRITICAL_NAMES=" homeassistant homebridge omada-controller-1 "
 
 # Share settings Claude may change without per-action approval (CHANGE tier)
 SAFE_SHARE_KEYS=" shareComment shareAllocator shareFloor shareSplitLevel shareInclude shareExclude shareUseCache shareCachePool shareCachePool2 "

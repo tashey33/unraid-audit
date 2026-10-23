@@ -26,7 +26,10 @@
       "Bash(ssh unraid-audit plugin-update *)",
       "Bash(ssh unraid-audit plugin-remove *)",
       "Bash(ssh unraid-audit server-restart)",
-      "Bash(ssh unraid-audit server-poweroff)"
+      "Bash(ssh unraid-audit server-poweroff)",
+      "Bash(ssh unraid-audit docker-* homeassistant)",
+      "Bash(ssh unraid-audit docker-* homebridge)",
+      "Bash(ssh unraid-audit docker-* omada-controller-1)"
     ],
     "deny": [
       "PowerShell",
