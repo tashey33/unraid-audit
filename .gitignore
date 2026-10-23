@@ -1,0 +1,8 @@
+# local state — never commit
+.claude/backup-confirmed
+.claude/settings.local.json
+notes/
+*.selftest
+__pycache__/
+*.pyc
+.DS_Store

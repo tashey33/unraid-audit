@@ -1,0 +1,137 @@
+{
+  "permissions": {
+    "defaultMode": "default",
+    "disableBypassPermissionsMode": "disable",
+    "disableAutoMode": "disable",
+    "allow": [
+      "Bash(ssh unraid-audit *)"
+    ],
+    "ask": [
+      "Bash(ssh unraid-audit docker-remove *)",
+      "Bash(ssh unraid-audit docker-image-prune)",
+      "Bash(ssh unraid-audit vm-force-stop *)",
+      "Bash(ssh unraid-audit cfg-set *)",
+      "Bash(ssh unraid-audit cfg-restore *)",
+      "Bash(ssh unraid-audit share-set * shareExport *)",
+      "Bash(ssh unraid-audit share-set * shareSecurity *)",
+      "Bash(ssh unraid-audit share-set * shareExportNFS *)",
+      "Bash(ssh unraid-audit share-set * shareSecurityNFS *)",
+      "Bash(ssh unraid-audit share-set * shareHostListNFS *)",
+      "Bash(ssh unraid-audit share-set * shareReadList *)",
+      "Bash(ssh unraid-audit share-set * shareWriteList *)",
+      "Bash(ssh unraid-audit share-set * shareCaseSensitive *)",
+      "Bash(ssh unraid-audit share-set * shareFruit *)",
+      "Bash(ssh unraid-audit parity-check-correct)",
+      "Bash(ssh unraid-audit plugin-install *)",
+      "Bash(ssh unraid-audit plugin-update *)",
+      "Bash(ssh unraid-audit plugin-remove *)",
+      "Bash(ssh unraid-audit server-restart)",
+      "Bash(ssh unraid-audit server-poweroff)"
+    ],
+    "deny": [
+      "PowerShell",
+      "Agent",
+      "mcp__*",
+
+      "Read(//mnt/**)",
+      "Read(//dev/**)",
+      "Read(//boot/config/shadow)",
+      "Read(//boot/config/passwd)",
+      "Read(//boot/config/smbpasswd)",
+      "Read(//boot/config/ssh/**)",
+      "Read(//boot/config/ssl/**)",
+      "Read(//boot/config/wireguard/**)",
+      "Read(//boot/config/claude-gate/**)",
+      "Read(//etc/shadow)",
+      "Read(~/.ssh/**)",
+      "Read(//root/.ssh/**)",
+
+      "Edit(/.claude/**)",
+      "Edit(~/.claude/**)",
+      "Edit(~/.ssh/**)",
+      "Edit(//boot/**)",
+      "Edit(//etc/**)",
+      "Edit(//mnt/**)",
+
+      "Bash(*/mnt/*)",
+      "Bash(*approve.sh*)",
+      "Bash(scp *)",
+      "Bash(sftp *)",
+      "Bash(rsync *)",
+      "Bash(sshfs *)",
+      "Bash(ssh -*)",
+      "Bash(*smbclient*)",
+      "Bash(mount *)",
+      "Bash(umount *)",
+      "Bash(*curl *)",
+      "Bash(*wget *)",
+      "Bash(nc *)",
+      "Bash(*socat *)",
+      "Bash(*python*)",
+      "Bash(*perl *)",
+      "Bash(bash *)",
+      "Bash(sh *)",
+      "Bash(*sh -c*)",
+      "Bash(sudo *)",
+      "Bash(su *)",
+
+      "Bash(rm *)",
+      "Bash(rmdir *)",
+      "Bash(shred *)",
+      "Bash(truncate *)",
+      "Bash(dd *)",
+      "Bash(*mkfs*)",
+      "Bash(*wipefs*)",
+      "Bash(*blkdiscard*)",
+      "Bash(*fdisk *)",
+      "Bash(*sgdisk*)",
+      "Bash(*parted *)",
+      "Bash(*xfs_repair*)",
+      "Bash(*zpool destroy*)",
+      "Bash(*zfs destroy*)",
+      "Bash(*btrfs check --repair*)",
+      "Bash(mdcmd *)",
+      "Bash(shutdown*)",
+      "Bash(reboot*)",
+      "Bash(poweroff*)",
+      "Bash(powerdown*)",
+      "Bash(newperms*)",
+      "Bash(chmod *)",
+      "Bash(chown *)",
+      "Bash(docker *)",
+      "Bash(virsh *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Read|NotebookRead|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "excludedCommands": [
+      "ssh unraid-audit *"
+    ],
+    "network": {
+      "allowedDomains": []
+    },
+    "filesystem": {
+      "denyRead": [
+        "~/.ssh",
+        "/mnt",
+        "/boot"
+      ]
+    }
+  }
+}
