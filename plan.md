@@ -121,10 +121,18 @@ The exact PowerShell commands are in **README §1**. In summary:
 ### 0.3 Create the audit key and SSH alias (owner, on the workstation)
 In PowerShell (Windows 10/11 include OpenSSH):
 ```powershell
-ssh-keygen -t ed25519 -f $HOME\.ssh\unraid_audit -C claude-audit
-notepad $HOME\.ssh\config
+New-Item -ItemType Directory -Force "$HOME\.ssh" | Out-Null
+ssh-keygen -t ed25519 -f "$HOME\.ssh\unraid_audit" -C claude-audit
+Get-ChildItem "$HOME\.ssh\unraid_audit*"
+notepad "$HOME\.ssh\config"
 ```
-This creates a key pair used only by Claude. Press Enter twice for no passphrase. Git Bash, which Claude uses, reads the same `C:\Users\<you>\.ssh` folder.
+- `New-Item` creates the `.ssh` folder if it doesn't exist yet. Without it, `ssh-keygen` fails with "Saving key … failed: No such file or directory".
+- Use `$HOME\…`, not `~/…`, on the command line. Windows' `ssh-keygen` doesn't expand `~`. Inside the config file, `~/.ssh/…` is fine.
+- **No passphrase:** press Enter twice when asked. Claude's commands can't type a passphrase, and `BatchMode yes` below stops ssh from asking, so a key with a passphrase fails with `Permission denied (publickey)`. Already set one? Remove it with `ssh-keygen -p -f "$HOME\.ssh\unraid_audit"`: enter the old passphrase, then press Enter twice. The key is deliberately low-value: forced into the gate, limited to your PC's IP, and unable to do DANGEROUS actions without `approve.sh`. Keep it in `.ssh` (only your Windows account can read it) and out of OneDrive.
+- `Get-ChildItem` should list `unraid_audit` (private key) and `unraid_audit.pub` (public key, used in step 0.4).
+- If Notepad asks to create `config`, click **Yes**.
+
+Git Bash, which Claude uses, reads the same `C:\Users\<you>\.ssh` folder.
 
 Add to the config file and save it **without** a `.txt` extension:
 ```
