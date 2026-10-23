@@ -5,9 +5,19 @@
 #   1. guard.py   — sample tool calls → allow (0) / prompt (0 + "ask") / block (2)
 #   2. gate.sh    — dry-run decisions, tiers, approvals, expiry, freshness
 #   3. gate.sh    — real config edit + automatic backup + restore on a temp copy
-# Usage: bash tests/selftest.sh     (from the project folder)
+# Usage (from the project folder):
+#   Linux/macOS/WSL/Git Bash:  bash tests/selftest.sh
+#   Windows PowerShell:        & "$env:ProgramFiles\Git\bin\bash.exe" tests/selftest.sh
 cd "$(dirname "$0")/.." || exit 1
 GUARD=".claude/hooks/guard.py"
+# Find a real Python 3 (on Windows "python3" is often a Microsoft Store placeholder)
+PY=""
+for cand in "py -3" python3 python; do
+  if $cand -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then PY="$cand"; break; fi
+done
+[ -n "$PY" ] || { echo "Python 3.8+ not found (install it: winget install Python.Python.3.12)"; exit 1; }
+echo "using Python: $PY"
+
 GATE="server/gate.sh"
 APPROVE="server/approve.sh"
 export CLAUDE_PROJECT_DIR="$PWD"
@@ -19,9 +29,9 @@ bad() { fail=$((fail+1)); echo "FAIL $*"; }
 
 # ---------- helpers
 hook_rc() {   # tool json -> sets RC and OUT
-  OUT="$(printf '{"tool_name":"%s","tool_input":%s,"cwd":"%s"}' "$1" "$2" "$PWD" | python3 "$GUARD" 2>/dev/null)"; RC=$?
+  OUT="$(printf '{"tool_name":"%s","tool_input":%s,"cwd":"%s"}' "$1" "$2" "$PWD" | $PY "$GUARD" 2>/dev/null)"; RC=$?
 }
-cmdjson() { python3 -c 'import json,sys;print(json.dumps({"command":sys.argv[1]}))' "$1"; }
+cmdjson() { $PY -c 'import json,sys;print(json.dumps({"command":sys.argv[1]}))' "$1"; }
 bash_ok()  { hook_rc Bash "$(cmdjson "$1")"; { [ $RC = 0 ] && ! grep -q '"ask"' <<<"$OUT"; } && ok || bad "hook allow: $1 (rc=$RC $OUT)"; }
 bash_ask() { hook_rc Bash "$(cmdjson "$1")"; { [ $RC = 0 ] && grep -q '"ask"' <<<"$OUT"; } && ok || bad "hook ask: $1 (rc=$RC)"; }
 bash_no()  { hook_rc Bash "$(cmdjson "$1")"; [ $RC = 2 ] && ok || bad "hook block: $1 (rc=$RC)"; }
@@ -79,7 +89,7 @@ tool_no Edit  '{"file_path":".claude/settings.json","old_string":"a","new_string
 tool_no Write '{"file_path":".claude/backup-confirmed","content":"x"}'
 tool_no Write '{"file_path":".claude/hooks/guard.py","content":"x"}'
 tool_no PowerShell '{"command":"Get-ChildItem"}'
-printf 'not json' | python3 "$GUARD" >/dev/null 2>&1; [ $? = 2 ] && ok || bad "hook: bad input should fail closed"
+printf 'not json' | $PY "$GUARD" >/dev/null 2>&1; [ $? = 2 ] && ok || bad "hook: bad input should fail closed"
 
 echo "== stale backup (> 24h): READ ok, CHANGE/DANGEROUS refused"
 touch -d '2 days ago' "$MARK" "$SMARK"
@@ -156,6 +166,9 @@ run_real "cfg-set ident.cfg USE_SSH no" >/dev/null 2>&1
 grep -qx 'USE_SSH="yes"' "$CR/ident.cfg" && ok || bad "cfg-set changed a file without approval"
 approve cfg-set ident.cfg USE_SSH no; run_real "cfg-set ident.cfg USE_SSH no" >/dev/null
 grep -qx 'USE_SSH="no"' "$CR/ident.cfg" && ok || bad "approved cfg-set did not apply"
+
+echo "== guard.py: Windows path handling (simulated)"
+if $PY tests/guard_windows_sim.py .claude/hooks/guard.py; then ok; else bad "Windows path simulation"; fi
 
 # ---------- restore marker state
 rm -f "$MARK"; [ -f "$MARK.selftest" ] && mv "$MARK.selftest" "$MARK"

@@ -6,7 +6,7 @@
 unraid-audit/
 ├── plan.md                    ← this file
 ├── .claude/
-│   ├── settings.json          ← Claude Code permissions, sandbox, hook registration
+│   ├── settings.json          ← Claude Code permissions and hook registration
 │   └── hooks/guard.py         ← client-side guard (runs before every Claude command)
 ├── server/gate.sh             ← server-side gate (owner installs on the Unraid flash)
 ├── server/approve.sh          ← owner-only helper that approves one dangerous action
@@ -34,18 +34,22 @@ unraid-audit/
 
 ### 0.1 How the rules are enforced (in code, not by request)
 
-Instructions in a plan only shape what Claude tries to do. These four layers decide what it **can** do. Each one works even if the others fail.
+Instructions in a plan only shape what Claude tries to do. These layers decide what it **can** do. Each one works even if the others fail.
+
+**Workstation: native Windows.** Claude Code is installed with `winget` (or the Desktop app), and Git for Windows provides the Bash shell Claude uses. Claude Code's OS sandbox doesn't exist on native Windows, so layer 3 is **off**; the other three are on.
 
 | # | Layer | Where it runs | What it enforces | Can Claude change it? |
 |---|---|---|---|---|
 | 1 | **Server gate** (`server/gate.sh`) bound to the audit SSH key as a *forced command* with `restrict` | Unraid server, enforced by sshd | Whatever Claude sends, sshd runs the gate instead. The gate accepts only its named READ/CHANGE/DANGEROUS commands with validated arguments. There is no command that touches `/mnt` contents, raw disks or password/key files, and NEVER-tier actions aren't implemented. Secrets are redacted. CHANGE and DANGEROUS need the backup marker to be < 24 h old. DANGEROUS also needs a one-time, unexpired approval file that only `approve.sh` (run by the owner) creates; it's consumed on use. Config edits are backed up automatically. Forwarding and shells are disabled. Every request is logged to syslog (`claude-gate`: ALLOW / DENY / APPROVAL-USED / CHANGED). | No — no gate command writes to the gate, `approve.sh`, the approvals folder or the backup marker |
-| 2 | **Guard hook** (`.claude/hooks/guard.py`) | Workstation, run by Claude Code before every Bash/file tool call | Default-deny. Bash may only run `ssh unraid-audit <gate-command>` (same allowlist and tiers as the gate) or simple local text tools. No ssh options, other hosts, pipes after ssh, `;` `&&` redirects or substitutions. Refuses CHANGE/DANGEROUS when `.claude/backup-confirmed` is > 24 h old. Asks Claude Code to prompt the owner for every DANGEROUS call. File tools can't read `/mnt`, `/dev`, secrets or `~/.ssh`, and can't write outside the project or into `.claude/`. Fails closed on internal errors. | No — writes to `.claude/` are blocked |
-| 3 | **Sandbox** (OS-level: bubblewrap on Linux/WSL2, Seatbelt on macOS) | Workstation, enforced by the operating system | Every Bash command except `ssh unraid-audit …` runs with no network and can't read `~/.ssh`, `/mnt` or `/boot`. Strict mode: no unsandboxed retries; Claude Code won't start if the sandbox is unavailable. | No |
-| 4 | **Permission rules** (`settings.json`) | Workstation, enforced by Claude Code | `ssh unraid-audit *` is allowed. **Ask rules force a permission prompt for every DANGEROUS gate command.** Ask beats allow, and choosing "don't ask again" can't turn the prompt off. Backstop deny list (local destructive commands, `/mnt` paths, secrets, `approve.sh`, `scp`/`rsync`/`curl`, interpreters, local `docker`/`virsh`). Removes PowerShell, sub-agents and MCP tools. Bypass and auto modes disabled, so prompts can't be skipped. | No — `.claude/` is protected |
+| 2 | **Guard hook** (`.claude/hooks/guard.py`) | Workstation, run by Claude Code before every Bash/file tool call | Default-deny. Bash may only run `ssh unraid-audit <gate-command>` (same allowlist and tiers as the gate) or simple local text tools. No ssh options, other hosts, pipes after ssh, `;` `&&` redirects or substitutions. Refuses CHANGE/DANGEROUS when `.claude/backup-confirmed` is > 24 h old. Asks Claude Code to prompt the owner for every DANGEROUS call. File tools can't read `/mnt`, `/dev`, secrets or `~/.ssh` (`C:\Users\<you>\.ssh`), and can't write outside the project or into `.claude/`. Registered with `onFailure: "block"`: if Python is missing, the script can't start, crashes or times out, every guarded call is **refused**, not allowed. Understands Windows (`C:\…`) and Git Bash (`/c/…`) paths. | No — writes to `.claude/` are blocked |
+| 3 | **Sandbox** (OS-level) | — | **Not available on native Windows.** On Linux, macOS or WSL2 it can be switched back on (README "Other platforms"). Without it, local commands aren't network- or filesystem-isolated by the OS; the guard hook's default-deny list (only `ssh unraid-audit …` and a few text tools) carries that job. | — |
+| 4 | **Permission rules** (`settings.json`) | Workstation, enforced by Claude Code | `ssh unraid-audit *` is allowed. **Ask rules force a permission prompt for every DANGEROUS gate command.** Ask beats allow, and choosing "don't ask again" can't turn the prompt off. Backstop deny list (local destructive commands, `/mnt` paths, secrets, `approve.sh`, `scp`/`rsync`/`curl`, interpreters, local `docker`/`virsh`). Removes PowerShell (also switched off via `CLAUDE_CODE_USE_POWERSHELL_TOOL=0`), sub-agents and MCP tools. Denies `powershell`, `pwsh`, `cmd.exe`, `wsl`, `reg` and `schtasks` from Bash. Bypass and auto modes disabled, so prompts can't be skipped. | No — `.claude/` is protected |
 
 **Honest limits**
-- Layers 2–4 only apply to Claude Code on the workstation. Layer 1 is the real boundary: it holds even if the workstation side is misconfigured.
-- The hook only blocks when it exits with code 2. If `python3` is missing or the hook isn't loaded, it doesn't block. Step 0.5 proves it's active.
+- Layers 2 and 4 only apply to Claude Code on the workstation. Layer 1 is the real boundary: it holds even if the workstation side is misconfigured.
+- **No OS sandbox on native Windows.** If something got past the guard hook (a bug, or a Claude Code version that ignores hooks), a local command would run with your normal Windows permissions. The gate still limits what can reach the server.
+- The hook fails closed (`onFailure: "block"`, needs Claude Code v2.1.295 or later). If the hook isn't registered at all, e.g. Claude Code was started outside the project folder, it doesn't run. Step 0.5 proves it's active.
+- **Desktop app:** the kit is set up and tested for the `claude` command line. If you use the Desktop app instead, open this folder as the project and run every step-0.5 check there too. If any check fails in the Desktop app, use the command line.
 - The gate protects the **audit key only**. Any other root key or password login bypasses it (that's the owner's access). Step 0.6d lists every key so the owner can decide.
 - The DANGEROUS-tier server approval is only as strong as the owner's own access: anyone with a root session on the server can run `approve.sh`. Claude has no root session other than the gated audit key.
 - Editing a `.cfg` file isn't always enough for Unraid to apply the setting. Some settings are held in memory and only take effect, or get rewritten, when the matching WebGUI page or service reloads them. Claude verifies every config change, and if a change doesn't take, the owner applies it in the WebGUI. Step 0.6l tests this once on a harmless setting.
@@ -92,19 +96,20 @@ ssh root@tower "tar -C /boot -czf - ." > ~/unraid-backups/unraid-flash-$(date +%
 
 **Export & verify (do all of these)**
 1. **Check the contents:** `unzip -l <file>.zip` or `tar -tzf <file>.tar.gz | less`. Confirm there's a `config/` folder, a license key file (`config/*.key`), `config/super.dat` (disk assignments), `config/shares/` and the boot files (`bz*`).
-2. **Checksum:** `sha256sum <file> > <file>.sha256` (macOS: `shasum -a 256`).
+2. **Checksum:** Windows PowerShell: `Get-FileHash <file> -Algorithm SHA256 | Format-List > <file>.sha256.txt` (Linux: `sha256sum <file> > <file>.sha256`).
 3. **Second copy:** copy the file and its `.sha256` to a second location that isn't this server (another drive, NAS or cloud). That gives 3 copies: the flash and two exports.
-4. **Protect it:** it holds password hashes, SSH/WireGuard keys and the license. Encrypt it (e.g. `gpg -c <file>` or a password-protected 7-Zip) and/or limit access (`chmod 600 <file>`).
+4. **Protect it:** it holds password hashes, SSH/WireGuard keys and the license. Encrypt it (e.g. a password-protected 7-Zip archive with AES-256) and keep it out of shared folders. On Windows, don't leave an unencrypted copy in a OneDrive/Dropbox-synced folder.
 5. **Record the disk map:** screenshot or print the **Main** tab showing each disk's slot, model and serial. Restoring an old backup after disks have been reassigned can overwrite data, so you need to know which disk was where.
 6. **Record it on the server** (creates the gate's marker file; do this after step 0.4 has created the folder, or create the folder now):
    ```bash
    mkdir -p /boot/config/claude-gate
    echo "$(date -Is) file=<name> sha256=<hash> copies=<where> unraid=$(cat /etc/unraid-version)" > /boot/config/claude-gate/BACKUP-CONFIRMED
    ```
-7. **Record it on the workstation** (unlocks the guard hook), in the project folder:
-   ```bash
-   echo "$(date -Is) file=<name> sha256=<hash> copies=<where>" > .claude/backup-confirmed
+7. **Record it on the workstation** (unlocks the guard hook). In PowerShell, in the project folder:
+   ```powershell
+   "$(Get-Date -Format s) file=<name> sha256=<hash> copies=<where>" | Set-Content .claude\backup-confirmed
    ```
+   Re-running this command refreshes the 24-hour clock.
 
 **Restore notes (for reference)**
 - *Same flash drive is fine:* use the Unraid **USB Flash Creator** with the **Local Zip** option, or format the stick FAT32, label it `UNRAID`, extract the backup onto it and run `make_bootable` (`.bat` on Windows) as administrator.
@@ -112,21 +117,25 @@ ssh root@tower "tar -C /boot -czf - ." > ~/unraid-backups/unraid-flash-$(date +%
 - *Unraid Connect backup:* afterwards you must reset user passwords and regenerate WireGuard keys.
 - **Backup freshness is enforced:** CHANGE and DANGEROUS actions are refused once the backup record is more than 24 hours old. Before each day of changes, repeat 0.1 and refresh both records (server: re-run step 6; workstation: re-run step 7). READ commands keep working with an older backup.
 
-### 0.2 Prepare the workstation (owner)
-1. Install Claude Code and `python3`. Install sandbox prerequisites: on Linux/WSL2 `bubblewrap` and `socat` (e.g. `sudo apt-get install bubblewrap socat`); on macOS nothing extra is needed. Native Windows can't sandbox, so use WSL2.
-2. Put this `unraid-audit/` folder on the workstation and run `bash tests/selftest.sh`. All checks must pass. It runs offline and changes nothing.
-3. Start Claude Code **inside** `unraid-audit/` and accept the workspace-trust prompt. Then check:
-   - `/sandbox` shows the sandbox enabled with no missing dependencies.
+### 0.2 Prepare the workstation (owner, Windows)
+The exact PowerShell commands are in **README §1**. In summary:
+1. Install **Git for Windows**, **Python 3** and **Claude Code** with `winget`. Open a new PowerShell window afterwards.
+2. Clone the repo **over HTTPS** into a normal folder, e.g. `C:\code\unraid-audit`. Avoid OneDrive-synced folders: syncing can lock files and would copy your backup record around.
+3. Run the self-test through Git Bash. All checks must pass. It runs offline and changes nothing.
+4. Start `claude` **inside** the folder, sign in, and accept the workspace-trust prompt. Then check:
    - `/permissions` lists the rules from `.claude/settings.json`.
-   - `/hooks` shows the `PreToolUse` guard.
+   - `/hooks` shows the `PreToolUse` guard (`py -3 …guard.py`, on failure: block).
+   - `claude --version` is 2.1.295 or later, which `onFailure` needs.
 
 ### 0.3 Create the audit key and SSH alias (owner, on the workstation)
-```bash
-ssh-keygen -t ed25519 -f ~/.ssh/unraid_audit -C claude-audit
+In PowerShell (Windows 10/11 include OpenSSH):
+```powershell
+ssh-keygen -t ed25519 -f $HOME\.ssh\unraid_audit -C claude-audit
+notepad $HOME\.ssh\config
 ```
-Creates a new key pair used only by Claude. Leave the passphrase empty, or load the key into ssh-agent before starting Claude Code.
+This creates a key pair used only by Claude. Press Enter twice for no passphrase. Git Bash, which Claude uses, reads the same `C:\Users\<you>\.ssh` folder.
 
-Add to `~/.ssh/config`:
+Add to the config file and save it **without** a `.txt` extension:
 ```
 Host unraid-audit
     HostName 192.168.1.10        # the server's IP
@@ -146,21 +155,22 @@ Host unraid-audit
    - `CRITICAL_NAMES` — containers/VMs that need approval to start/stop.
    - Leave `ENABLE_PARITY`, `ENABLE_PLUGINS` and `ENABLE_POWER` at `0` for now (step 0.6k).
    - Optionally adjust `MAX_BACKUP_AGE_H` (24) and `APPROVAL_TTL_MIN` (30).
-   Re-run `bash tests/selftest.sh`.
-2. Copy the gate and the approval helper to the server. Either check them out from GitHub directly on Unraid (README §2, Option A or B), or copy them from the workstation:
-   ```bash
+   Re-run the self-test.
+2. Copy the gate and the approval helper to the server. Either check them out from GitHub directly on Unraid (README §2, Option A or B), or copy them from the workstation (PowerShell, in the repo folder):
+   ```powershell
    ssh root@tower "mkdir -p /boot/config/claude-gate"
    scp server/gate.sh server/approve.sh root@tower:/boot/config/claude-gate/
-   sha256sum server/gate.sh server/approve.sh                                   # note the hashes
-   ssh root@tower "sha256sum /boot/config/claude-gate/gate.sh /boot/config/claude-gate/approve.sh"   # must match
+   Get-FileHash server\gate.sh, server\approve.sh -Algorithm SHA256              # note the hashes
+   ssh root@tower "sha256sum /boot/config/claude-gate/gate.sh /boot/config/claude-gate/approve.sh"   # must match (same hex, lower-case)
    ```
+   If the hashes differ, the files were checked out with Windows line endings. The repo's `.gitattributes` prevents this; re-clone if it happens.
 3. Bind the audit key to the gate. Append **one line** to `/boot/config/ssh/root/authorized_keys`, which persists on the flash; on Unraid 6.9+ `/root/.ssh` is a symlink to it:
    ```
-   restrict,from="<workstation-IP>",command="/bin/bash /boot/config/claude-gate/gate.sh" <contents of ~/.ssh/unraid_audit.pub>
+   restrict,from="<workstation-IP>",command="/bin/bash /boot/config/claude-gate/gate.sh" <contents of C:\Users\<you>\.ssh\unraid_audit.pub>
    ```
    - `command=` forces the gate whatever the client asks for.
    - `restrict` turns off port/agent/X11 forwarding and terminals.
-   - `from=` only accepts the key from the workstation's IP.
+   - `from=` only accepts the key from the Windows PC's network IP (README §1 shows how to find it). Give the PC a DHCP reservation so it doesn't change.
 4. Make sure the backup marker from 0.1 step 6 exists.
 
 **How you approve a DANGEROUS action later.** From your own root session — the WebGUI terminal, or `ssh -t root@tower` with your normal login, never the audit key:
@@ -172,7 +182,7 @@ bash /boot/config/claude-gate/approve.sh --revoke-all          # cancel all pend
 `approve.sh` shows the exact action and asks you to type `YES`. The approval only matches that exact command and arguments, works once, and expires.
 
 ### 0.5 Prove the guards work before Claude connects (owner)
-From the owner's own terminal (bypassing Claude, to test the server on its own):
+From your own PowerShell window (bypassing Claude, to test the server on its own):
 
 | Test | Expected |
 |---|---|
@@ -186,11 +196,14 @@ From the owner's own terminal (bypassing Claude, to test the server on its own):
 | `ssh unraid-audit format /dev/sda` | `DENIED - unknown command` (NEVER tier) |
 | `ssh root@tower "grep claude-gate /var/log/syslog \| tail"` | `ALLOW`/`DENY` lines for the tests above |
 
-Then in Claude Code:
+Then in Claude Code (started from inside the repo folder):
 - Ask Claude to run `ls /mnt`. It must come back **"BLOCKED by audit guard"**.
+- Ask Claude to run `powershell -c dir`. It must be **blocked**.
+- Ask Claude to read `C:\Users\<you>\.ssh\unraid_audit`. It must be **blocked**.
 - Ask Claude to run `ssh unraid-audit docker-image-prune`. Claude Code must show you a **permission prompt**. Answer **No**.
+- **Fail-closed check:** temporarily rename `.claude\hooks\guard.py` to `guard.py.off` in Explorer. Ask Claude to run `ls`. It must be **blocked**, with a hook-failure message. Rename the file back.
 
-If either check fails, a workstation guard isn't active: stop and fix that first.
+If any check fails, a workstation guard isn't active: stop and fix that first.
 
 ### 0.6 First connection by Claude — close the known gaps (pre-approved, read-only)
 
@@ -315,7 +328,7 @@ Final report (found / changed / deferred); inventory; change log; maintenance ch
 **Remove the audit access (owner):**
 - delete the audit key's line from `authorized_keys`
 - copy `/boot/config/claude-gate/backups/` somewhere safe if you want to keep the config history, then delete `/boot/config/claude-gate/` (gate, `approve.sh`, approvals, backups, marker)
-- delete `~/.ssh/unraid_audit*` and the `Host unraid-audit` block on the workstation
+- on the workstation, delete `C:\Users\<you>\.ssh\unraid_audit` and `unraid_audit.pub`, and the `Host unraid-audit` block in `C:\Users\<you>\.ssh\config`
 - confirm with `ssh unraid-audit help` → it must fail
 
 ## Stop conditions
@@ -333,7 +346,8 @@ Stop and report if:
 
 ## Maintaining the guards
 - **Allowlist in two places:** the gate command list and tiers exist in both `server/gate.sh` and `.claude/hooks/guard.py` (`GATE`, `SAFE_SHARE_KEYS`, `SENSITIVE_SHARE_KEYS`). DANGEROUS commands also need an ask rule in `settings.json`. Edit all three, rerun `tests/selftest.sh`, reinstall the gate and record its new hash.
-- **Use plain ssh calls:** run `ssh unraid-audit <command>` on its own line. Piping its output into anything keeps the call inside the sandbox, where ssh can't connect.
+- **Use plain ssh calls:** run `ssh unraid-audit <command>` on its own line, with forward slashes in any path. The guard refuses ssh with pipes, options, backslashes or anything chained.
+- **Line endings:** keep `.gitattributes` (`eol=lf`). Without it, Git for Windows checks files out with CRLF, which breaks the bash scripts and changes `gate.sh`'s hash.
 - **Permission mode:** Manual (`default`). Bypass and auto modes are disabled so DANGEROUS prompts can't be skipped. Don't run Claude Code in `dontAsk` mode: it denies anything that would prompt, so DANGEROUS actions would simply fail.
 
 ---
@@ -349,4 +363,6 @@ Stop and report if:
 - Unraid forums — `mover start` usage on Unraid 7.0: https://forums.unraid.net/topic/186908-mover-not-working-on-unraid-700/
 - Unraid forums — `mdcmd check` (Unraid 5-era thread; current syntax unconfirmed, hence switched off): https://forums.unraid.net/topic/16233-force-parity-check/
 - Claude Code docs — Configure permissions (rule matching, hooks precedence, limits): https://code.claude.com/docs/en/permissions
-- Claude Code docs — Sandboxing (strict mode, excludedCommands, ssh behaviour): https://code.claude.com/docs/en/sandboxing
+- Claude Code docs — Sandboxing (not supported on native Windows; Linux/WSL2 option): https://code.claude.com/docs/en/sandboxing
+- Claude Code docs — Hooks (`onFailure: "block"`, exec form `args`, Git Bash on Windows): https://code.claude.com/docs/en/hooks
+- Claude Code docs — Advanced setup (WinGet install, Git for Windows, Windows options): https://code.claude.com/docs/en/setup

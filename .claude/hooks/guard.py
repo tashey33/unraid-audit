@@ -2,6 +2,11 @@
 """
 guard.py — PreToolUse hook for the Unraid audit (runs on the workstation).
 
+Supported workstation: native Windows (Claude Code + Git for Windows, whose
+Git Bash runs Claude's Bash tool). Also works on Linux / macOS / WSL.
+Registered in .claude/settings.json with onFailure "block", so if Python is
+missing or this script can't start, every guarded tool call is refused.
+
 Claude Code runs this script before every Bash / file tool call and passes the
 call as JSON on stdin. Exit code 2 blocks the call (the reason on stderr is
 shown to Claude). Exit 0 lets the call continue to the normal permission rules.
@@ -107,9 +112,24 @@ PROTECTED_READ = [
 SECRET_WORDS = re.compile(r"(id_rsa|id_ed25519|id_ecdsa|unraid_audit|shadow|smbpasswd|authorized_keys|\.ssh|approve\.sh)", re.I)
 
 
+# Server paths are refused as text, whatever OS the workstation runs. On Windows
+# "/mnt/user" doesn't resolve to anything local, so a path check alone would miss it.
+SERVER_PATH = re.compile(r"(^|[\s=:'\"])/(mnt|dev|boot|root/\.ssh|etc/shadow)(/|$|\s|['\"])")
+IS_WINDOWS = os.name == "nt"
+
+
 def block(reason: str) -> None:
     print(f"BLOCKED by audit guard: {reason}", file=sys.stderr)
     sys.exit(2)
+
+
+def native(path: str) -> str:
+    """Git Bash on Windows writes C:\\x as /c/x; convert so path checks work."""
+    if IS_WINDOWS:
+        m = re.match(r"^/([A-Za-z])(/.*)?$", path)
+        if m:
+            path = f"{m.group(1)}:{m.group(2) or '/'}"
+    return path
 
 
 def ask(reason: str) -> None:
@@ -122,18 +142,25 @@ def ask(reason: str) -> None:
 
 
 def norm(path: str, cwd: str) -> str:
-    path = os.path.expanduser(path)
+    path = os.path.expanduser(native(path))
     if not os.path.isabs(path):
-        path = os.path.join(cwd, path)
+        path = os.path.join(native(cwd), path)
     return os.path.realpath(path)
 
 
 def under(path: str, root: str) -> bool:
-    root = root.rstrip("/") or "/"
-    return path == root or path.startswith(root + "/")
+    """True if path is root or inside it (separator- and case-aware, Windows-safe)."""
+    p = os.path.normcase(os.path.normpath(path))
+    r = os.path.normcase(os.path.normpath(root))
+    try:
+        return os.path.commonpath([p, r]) == r
+    except ValueError:  # different drives / absolute vs relative
+        return False
 
 
 def check_read_path(path: str, cwd: str) -> None:
+    if SERVER_PATH.search(path) or path.replace("\\", "/").startswith(("/mnt", "/dev", "/boot")):
+        block(f"{path} is a server path that's off-limits (personal data / devices / secrets)")
     p = norm(path, cwd)
     for root in PROTECTED_READ:
         if under(p, os.path.realpath(root) if os.path.exists(root) else root):
@@ -228,6 +255,8 @@ def check_bash(command: str, cwd: str) -> None:
                 f"The server also needs your one-time approval: bash /boot/config/claude-gate/approve.sh {' '.join(req)}")
         return
 
+    if SERVER_PATH.search(command):
+        block("local commands may not reference server paths (/mnt, /dev, /boot ...); use a gate command")
     for seg in segments:
         prog = os.path.basename(seg[0])
         if seg[0] != prog:
@@ -247,8 +276,10 @@ def check_bash(command: str, cwd: str) -> None:
 
 
 def check_write_path(path: str, cwd: str, project: str) -> None:
+    if not path:
+        block("write without a file path")
     p = norm(path, cwd)
-    proj = os.path.realpath(project)
+    proj = os.path.realpath(native(project))
     if not under(p, proj):
         block(f"writes are only allowed inside the project folder ({proj})")
     if under(p, os.path.join(proj, ".claude")):
@@ -257,11 +288,15 @@ def check_write_path(path: str, cwd: str, project: str) -> None:
 
 def main() -> None:
     global BACKUP_MARKER
-    data = json.load(sys.stdin)
+    try:  # Windows consoles default to a legacy code page; keep messages readable
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    data = json.loads(sys.stdin.buffer.read().decode("utf-8-sig"))
     tool = data.get("tool_name", "")
     ti = data.get("tool_input") or {}
-    cwd = data.get("cwd") or os.getcwd()
-    project = os.environ.get("CLAUDE_PROJECT_DIR") or cwd
+    cwd = native(data.get("cwd") or os.getcwd())
+    project = native(os.environ.get("CLAUDE_PROJECT_DIR") or cwd)
     # Created by the OWNER after step 0.1. Claude can't create or touch it:
     # writes into .claude/ are blocked below and Bash has no write-capable tools.
     BACKUP_MARKER = os.path.join(os.path.realpath(project), ".claude", "backup-confirmed")

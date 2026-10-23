@@ -32,7 +32,6 @@
       "PowerShell",
       "Agent",
       "mcp__*",
-
       "Read(//mnt/**)",
       "Read(//dev/**)",
       "Read(//boot/config/shadow)",
@@ -45,14 +44,12 @@
       "Read(//etc/shadow)",
       "Read(~/.ssh/**)",
       "Read(//root/.ssh/**)",
-
       "Edit(/.claude/**)",
       "Edit(~/.claude/**)",
       "Edit(~/.ssh/**)",
       "Edit(//boot/**)",
       "Edit(//etc/**)",
       "Edit(//mnt/**)",
-
       "Bash(*/mnt/*)",
       "Bash(*approve.sh*)",
       "Bash(scp *)",
@@ -74,7 +71,6 @@
       "Bash(*sh -c*)",
       "Bash(sudo *)",
       "Bash(su *)",
-
       "Bash(rm *)",
       "Bash(rmdir *)",
       "Bash(shred *)",
@@ -99,7 +95,16 @@
       "Bash(chmod *)",
       "Bash(chown *)",
       "Bash(docker *)",
-      "Bash(virsh *)"
+      "Bash(virsh *)",
+      "Bash(*powershell*)",
+      "Bash(*pwsh*)",
+      "Bash(*cmd.exe*)",
+      "Bash(*cmd /c*)",
+      "Bash(*wsl *)",
+      "Bash(*wsl.exe*)",
+      "Bash(*reg *)",
+      "Bash(*schtasks*)",
+      "Read(~/.claude.json)"
     ]
   },
   "hooks": {
@@ -109,29 +114,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard.py\"",
-            "timeout": 10
+            "command": "py",
+            "args": [
+              "-3",
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard.py"
+            ],
+            "timeout": 15,
+            "onFailure": "block"
           }
         ]
       }
     ]
   },
-  "sandbox": {
-    "enabled": true,
-    "failIfUnavailable": true,
-    "allowUnsandboxedCommands": false,
-    "excludedCommands": [
-      "ssh unraid-audit *"
-    ],
-    "network": {
-      "allowedDomains": []
-    },
-    "filesystem": {
-      "denyRead": [
-        "~/.ssh",
-        "/mnt",
-        "/boot"
-      ]
-    }
+  "env": {
+    "CLAUDE_CODE_USE_POWERSHELL_TOOL": "0"
   }
 }

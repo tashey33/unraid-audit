@@ -17,9 +17,11 @@ These rules are **enforced in code**, not just written down. The full engagement
 |---|---|---|---|
 | Server gate | `server/gate.sh` | Unraid (forced command on a dedicated SSH key) | Only named commands with validated arguments. READ / CHANGE / DANGEROUS tiers. No access to share contents or secrets. Automatic config backups. Syslog audit trail. |
 | Approval helper | `server/approve.sh` | Unraid (owner's own root session only) | Creates a one-time, 30-minute approval for one exact DANGEROUS request |
-| Guard hook | `.claude/hooks/guard.py` | Workstation (Claude Code PreToolUse hook) | Default-deny check on every command and file access. Mirrors the gate's allowlist and tiers. Prompts on DANGEROUS. |
-| Sandbox + permissions | `.claude/settings.json` | Workstation (Claude Code) | OS sandbox with no network except the gated SSH. Ask rules for DANGEROUS. Backstop deny rules. Bypass/auto modes disabled. |
-| Self-test | `tests/selftest.sh` | Workstation | 157 offline checks that the guards allow, prompt and refuse what they should |
+| Guard hook | `.claude/hooks/guard.py` | Windows workstation (Claude Code PreToolUse hook) | Default-deny check on every command and file access. Mirrors the gate's allowlist and tiers. Prompts on DANGEROUS. **Fail-closed:** if it can't run, everything is blocked. |
+| Permissions | `.claude/settings.json` | Windows workstation (Claude Code) | Ask rules for DANGEROUS. Backstop deny rules (incl. PowerShell/cmd/wsl from Bash). PowerShell tool, sub-agents and MCP tools off. Bypass/auto modes disabled. |
+| Self-test | `tests/selftest.sh` | Workstation (Git Bash) | 158 offline checks (incl. a Windows path simulation) that the guards allow, prompt and refuse what they should |
+
+**Workstation:** native Windows with Claude Code and Git for Windows. Claude Code's OS sandbox isn't available on native Windows, so it's off. The guard hook and the server gate carry that job; see `plan.md` §0.1 "Honest limits". For Linux, macOS or WSL2, see [Other platforms](#other-platforms).
 
 Nothing runs against the server until the owner has **exported a flash (OS) backup to another machine** (plan step 0.1). Changes stop being allowed once that backup is more than 24 hours old.
 
@@ -32,8 +34,10 @@ unraid-audit/
 ├── README.md                 ← this file
 ├── plan.md                   ← the step-by-step engagement plan (start here)
 ├── .claude/
-│   ├── settings.json         ← Claude Code permissions, sandbox, hook registration
+│   ├── settings.json         ← Claude Code permissions and hook registration
 │   └── hooks/guard.py        ← client-side guard
+├── .github/                  ← branch ruleset + CODEOWNERS (PRs approved by the owner)
+├── .gitattributes            ← forces LF line endings (needed on Windows)
 ├── server/
 │   ├── gate.sh               ← server-side gate   → /boot/config/claude-gate/gate.sh
 │   └── approve.sh            ← owner approvals    → /boot/config/claude-gate/approve.sh
@@ -44,17 +48,59 @@ The repo contains **no secrets**: no keys, tokens, IPs or backup records. `.giti
 
 ---
 
-## 1. Check out on the workstation (where Claude Code runs)
+## 1. Set up the Windows workstation (where Claude Code runs)
 
-```bash
-git clone git@github.com:tashey33/unraid-audit.git     # or https://github.com/tashey33/unraid-audit.git
+Run these in **PowerShell** (a normal window, not Administrator). `winget` comes with Windows 10/11.
+
+**1. Install Git for Windows, Python 3 and Claude Code**
+```powershell
+winget install --id Git.Git -e
+winget install --id Python.Python.3.12 -e
+winget install --id Anthropic.ClaudeCode -e
+```
+**Close PowerShell and open a new window** so the new programs are on your PATH. Then check:
+```powershell
+git --version
+py -3 --version            # the guard runs with the "py" launcher, not "python3"
+claude --version           # must be 2.1.295 or later (needed for the fail-closed hook)
+```
+Claude Code needs a Pro, Max, Team, Enterprise or Console account. WinGet installs don't auto-update; update with `winget upgrade Anthropic.ClaudeCode`.
+
+**2. Clone the repo (HTTPS, no SSH key needed) into a non-OneDrive folder**
+```powershell
+New-Item -ItemType Directory -Force C:\code | Out-Null
+cd C:\code
+git clone https://github.com/tashey33/unraid-audit.git
 cd unraid-audit
-bash tests/selftest.sh                                  # must end with "failed: 0"
 ```
 
-Then follow `plan.md` from **step 0.1**: back up the flash first, then 0.2 onwards. Always start Claude Code from inside this folder so the `.claude/` settings and guard load.
+**3. Run the self-test** (through Git Bash; it runs offline and changes nothing)
+```powershell
+& "$env:ProgramFiles\Git\bin\bash.exe" tests/selftest.sh
+```
+The last line must be `passed: 158   failed: 0`.
 
-**Requirements:** Claude Code, `python3`, and on Linux/WSL2 `bubblewrap` and `socat` for the sandbox. macOS needs nothing extra. On Windows, use WSL2.
+**4. Find this PC's network IP.** You'll need it for `from=` in plan step 0.4.
+```powershell
+Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notmatch 'vEthernet|Loopback' } | Select-Object InterfaceAlias, IPAddress
+```
+Give this PC a DHCP reservation on your router so the IP doesn't change.
+
+**5. Start Claude Code from inside the folder**
+```powershell
+cd C:\code\unraid-audit
+claude
+```
+Sign in, then accept the "trust this folder" prompt. Check `/permissions` (the kit's rules are listed) and `/hooks` (the `PreToolUse` guard is listed). **Always start `claude` from this folder.** Started anywhere else, the guard and rules don't load.
+
+If Claude Code says it can't find Git Bash, point it there in PowerShell, then reopen the window:
+```powershell
+[Environment]::SetEnvironmentVariable("CLAUDE_CODE_GIT_BASH_PATH", "$env:ProgramFiles\Git\bin\bash.exe", "User")
+```
+
+**Desktop app instead of the command line?** Open `C:\code\unraid-audit` as the project and run every check in plan step 0.5 there. If any check fails in the app, use the `claude` command line.
+
+**Then follow `plan.md` from step 0.1**: flash backup first, then 0.2 onwards. Steps 0.3 (audit SSH key) and 0.4 (installing the gate) have Windows commands.
 
 ---
 
@@ -127,12 +173,15 @@ cp /tmp/unraid-audit/server/gate.sh /tmp/unraid-audit/server/approve.sh /boot/co
 
 ### Option C — copy from the workstation
 
-If the workstation already has the repo, skip GitHub on the server entirely:
+If the workstation already has the repo, skip GitHub on the server entirely. In PowerShell, in `C:\code\unraid-audit`:
 
-```bash
+```powershell
 ssh root@tower "mkdir -p /boot/config/claude-gate"
 scp server/gate.sh server/approve.sh root@tower:/boot/config/claude-gate/
+Get-FileHash server\gate.sh, server\approve.sh -Algorithm SHA256
+ssh root@tower "sha256sum /boot/config/claude-gate/gate.sh /boot/config/claude-gate/approve.sh"
 ```
+The two sets of hashes must match. PowerShell prints them in upper case; compare the hex digits.
 
 ### After installing (any option)
 
@@ -143,8 +192,8 @@ Continue with `plan.md` **step 0.4.3**: bind the audit key to the gate in `/boot
 ## 3. Updating
 
 1. Change the files on the workstation. If you change the gate's command list, update all three: `server/gate.sh`, `GATE` in `.claude/hooks/guard.py`, and the ask rules in `.claude/settings.json`.
-2. Run `bash tests/selftest.sh`. It must end with `failed: 0`.
-3. Commit and push.
+2. Run the self-test (`& "$env:ProgramFiles\Git\bin\bash.exe" tests/selftest.sh`). It must end with `failed: 0`.
+3. Commit on a branch, push, and open a pull request (see §4).
 4. On Unraid, repeat **Option A/B/C**. Compare the hashes.
 5. Ask Claude to run `ssh unraid-audit gate-hash` and confirm it matches the new hash.
 
@@ -187,14 +236,32 @@ From your own root session on Unraid:
 - revoke any GitHub token or deploy key you created
 
 On the workstation:
-- delete `~/.ssh/unraid_audit*` and the `Host unraid-audit` block in `~/.ssh/config`
+- delete `C:\Users\<you>\.ssh\unraid_audit` and `unraid_audit.pub`, and the `Host unraid-audit` block in `C:\Users\<you>\.ssh\config`
 - check that `ssh unraid-audit help` now fails
+
+---
+
+## Other platforms
+
+The kit also runs on Linux, macOS or WSL2, where you can add back Claude Code's OS sandbox as an extra layer. Two edits to `.claude/settings.json`:
+1. In the hook, change `"command": "py"` and `"args": ["-3", …]` to `"command": "python3"` and `"args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard.py"]`.
+2. Add a `sandbox` block:
+   ```json
+   "sandbox": {
+     "enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false,
+     "excludedCommands": ["ssh unraid-audit *"],
+     "network": { "allowedDomains": [] },
+     "filesystem": { "denyRead": ["~/.ssh", "/mnt", "/boot"] }
+   }
+   ```
+   On Linux/WSL2, install `bubblewrap` and `socat` first. Leave this block out on native Windows: with `failIfUnavailable`, Claude Code refuses to start there.
 
 ---
 
 ## Status and limits
 
-- Tested offline only (`tests/selftest.sh`, dry-run and temp-folder config edits). It hasn't been run against a live Unraid server yet. Plan steps 0.5–0.6 are the first live checks.
+- Tested offline only: `tests/selftest.sh` (dry-run and temp-folder config edits) on Linux, plus a simulation of the guard's Windows path handling. It hasn't been run on a real Windows PC or against a live Unraid server yet. Plan steps 0.5–0.6 are the first live checks.
+- No OS sandbox on native Windows (see `plan.md` §0.1).
 - Parity, plugin and restart/power-off commands ship **switched off** until their syntax is confirmed on your Unraid version (plan 0.6k).
 - Direct `.cfg` edits may not take effect until Unraid reloads them. Plan 0.6l tests this once.
 - See "Honest limits" in `plan.md` §0.1 for the rest.
