@@ -14,12 +14,12 @@
 # are refused. Commands run with fixed argument lists (no eval / bash -c).
 #
 # THREE TIERS
-#   READ       read-only health/inventory/config. Needs the backup marker.
+#   READ       read-only health/inventory/config.
 #   CHANGE     reversible changes (start/stop containers & VMs, SMART tests,
-#              scrubs, mover, safe share settings). Needs a backup marker
-#              newer than MAX_BACKUP_AGE_H. Config edits are auto-backed-up.
-#   DANGEROUS  destructive / hard-to-undo / lock-out risk. Needs a fresh backup
-#              AND a one-time approval the owner creates for that EXACT request
+#              scrubs, mover, safe share settings). Config edits are
+#              auto-backed-up.
+#   DANGEROUS  destructive / hard-to-undo / lock-out risk. Needs a one-time
+#              approval the owner creates for that EXACT request
 #              with approve.sh from their own root session. Approvals expire
 #              after APPROVAL_TTL_MIN and are consumed on use.
 #   NEVER      not implemented at all: format/wipe/partition, New Config, disk
@@ -35,7 +35,6 @@ export PATH=/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin
 export LC_ALL=C
 
 # ---------------------------------------------------------------- settings
-MAX_BACKUP_AGE_H=24        # CHANGE/DANGEROUS need a backup marker newer than this
 APPROVAL_TTL_MIN=30        # one-time approvals expire after this
 # Commands whose syntax could not be confirmed from Unraid's docs ship OFF.
 # Confirm the syntax on your Unraid version (plan step 0.6k), then set to 1.
@@ -57,7 +56,6 @@ TAG="claude-gate"
 REQ="${SSH_ORIGINAL_COMMAND:-}"
 GATE_DIR="/boot/config/claude-gate"
 GATE_PATH="$GATE_DIR/gate.sh"
-MARKER="$GATE_DIR/BACKUP-CONFIRMED"
 APPROVAL_DIR="$GATE_DIR/approvals"
 BACKUP_DIR="$GATE_DIR/backups"
 CONFIG_ROOT="/boot/config"
@@ -66,7 +64,6 @@ DRYRUN=0
 # set them (even if sshd's AcceptEnv were to allow it).
 if [ -z "${SSH_CONNECTION:-}" ] && [ -z "${SSH_CLIENT:-}" ]; then
   DRYRUN="${GATE_DRYRUN:-0}"
-  MARKER="${GATE_MARKER:-$MARKER}"
   APPROVAL_DIR="${GATE_APPROVAL_DIR:-$APPROVAL_DIR}"
   BACKUP_DIR="${GATE_BACKUP_DIR:-$BACKUP_DIR}"
   CONFIG_ROOT="${GATE_CONFIG_ROOT:-$CONFIG_ROOT}"
@@ -132,17 +129,13 @@ v_zpool() {
 }
 enabled() { [ "$1" = "1" ] || deny "'$CMD' is switched off until its syntax is confirmed on this server (see gate.sh settings)"; }
 
-# ---- marker / freshness / approvals
-[ "$CMD" = "help" ] || [ -f "$MARKER" ] || deny "initialization step 0.1 not done: the owner must export a flash backup and create $MARKER"
-
-need_fresh_backup() {
-  local age=$(( $(date +%s) - $(stat -c %Y "$MARKER") ))
-  [ "$age" -le $(( MAX_BACKUP_AGE_H * 3600 )) ] || deny "changes need a flash backup from the last ${MAX_BACKUP_AGE_H}h: repeat plan step 0.1 and update $MARKER"
-}
-tier_change()    { TIER="CHANGE"; need_fresh_backup; }
+# ---- tiers / approvals
+# (The plan tells the owner to take a flash backup before changes; the gate
+#  does not check for it.)
+tier_change()    { TIER="CHANGE"; }
 tier_for_name()  { if [[ "$CRITICAL_NAMES" == *" $1 "* ]]; then tier_dangerous; else tier_change; fi; }
 tier_dangerous() {
-  TIER="DANGEROUS"; need_fresh_backup
+  TIER="DANGEROUS"
   local h f age
   h="$(printf '%s' "$NREQ" | sha256sum | cut -d' ' -f1)"
   f="$APPROVAL_DIR/$h"
@@ -185,7 +178,7 @@ set_kv() {   # $1 file  $2 key  $3 value
 case "$CMD" in
   help) argc 1; allow_log; cat <<EOF
 claude-gate commands. Arguments in <>.
-READ (needs backup marker)
+READ
  system:   version  uname  uptime  free  df  top  lscpu  mounts
  hardware: dmi-system  dmi-memory  dmi-cpu  lspci  lsusb  lsblk  nvme-list  sensors
  disks:    smart-info <dev>  smart-health <dev>  smart-all <dev>  var-ini  disks-ini
@@ -197,14 +190,14 @@ READ (needs backup marker)
  vms:      virsh-list  virsh-dumpxml <vm>
  logs:     syslog-tail [lines]  syslog-errors
  init:     tools-check  paths-check  authkeys-summary  sshd-auth  ssh-version  gate-hash
-CHANGE (needs backup < ${MAX_BACKUP_AGE_H}h)
+CHANGE (reversible; runs without per-action approval)
  docker-start|docker-stop|docker-restart <container>
  vm-start <vm>   vm-stop <vm> (graceful)   vm-autostart <vm> on|off
  smart-test-short <dev>   smart-test-long <dev>
  zpool-scrub <zfs-pool>   btrfs-scrub <btrfs-pool>   mover-start
  parity-check (non-correcting)   parity-cancel                      [off: ENABLE_PARITY=$ENABLE_PARITY]
  share-set <share> <safe-key> <value>   cfg-restore <backup> (share files)
-DANGEROUS (needs backup < ${MAX_BACKUP_AGE_H}h AND owner approval via approve.sh, one use, ${APPROVAL_TTL_MIN} min)
+DANGEROUS (needs owner approval via approve.sh, one use, ${APPROVAL_TTL_MIN} min)
  docker-remove <container>   docker-image-prune   vm-force-stop <vm>
  share-set <share> <sensitive-key> <value>   cfg-set <file.cfg> <key> <value>   cfg-restore <backup> (other files)
  parity-check-correct                                               [off: ENABLE_PARITY=$ENABLE_PARITY]

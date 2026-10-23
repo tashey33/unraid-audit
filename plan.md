@@ -17,14 +17,14 @@ unraid-audit/
 
 ## 0. Ground rules
 
-1. **Backup first.** Before anything else — including installing the gate — the owner exports a backup of the Unraid OS (the flash drive) to another machine (step 0.1). **Enforced in code:** until the owner records the backup, the guard and the gate refuse every server command except `help`.
+1. **Backup first.** Before anything else — including installing the gate — the owner exports a backup of the Unraid OS (the flash drive) to another machine (step 0.1). This is an **instruction, not enforced in code**: the gate and guard don't check for a backup. Claude reminds the owner before the first server command and before each day of changes, and doesn't proceed with CHANGE or DANGEROUS work until the owner confirms a recent backup exists.
 2. **Three tiers of action, enforced in code:**
 
    | Tier | Examples | What's required |
    |---|---|---|
    | **READ** | health check, hardware inventory, config review | Nothing extra. Pre-approved by the owner. |
-   | **CHANGE** (reversible) | start/stop/restart a container or VM, VM autostart, SMART self-test, scrub, run the mover, non-correcting parity check, safe share settings (cache/pool use, allocation, split level, include/exclude, floor, comment) | Claude may do these **without asking each time**, but only when the flash backup is less than 24 hours old. Config edits save an automatic backup copy first and print the undo command. |
-   | **DANGEROUS** (destructive, hard to undo, or can lock people out) | remove a container, prune images, force-stop a VM, share security/export settings, any top-level config edit (network, SSH, WebGUI, Docker, VM settings), restoring a non-share config, correcting parity check, plugin install/update/remove, server restart/power-off | **Explicit owner permission, twice:** (a) a Claude Code permission prompt you must approve, and (b) a one-time approval you create on the server for that *exact* action with `approve.sh`. It expires after 30 minutes, works once, and still needs the backup to be < 24 h old. |
+   | **CHANGE** (reversible) | start/stop/restart a container or VM, VM autostart, SMART self-test, scrub, run the mover, non-correcting parity check, safe share settings (cache/pool use, allocation, split level, include/exclude, floor, comment) | Claude may do these **without asking each time**. Config edits save an automatic backup copy first and print the undo command. |
+   | **DANGEROUS** (destructive, hard to undo, or can lock people out) | remove a container, prune images, force-stop a VM, share security/export settings, any top-level config edit (network, SSH, WebGUI, Docker, VM settings), restoring a non-share config, correcting parity check, plugin install/update/remove, server restart/power-off | **Explicit owner permission, twice:** (a) a Claude Code permission prompt you must approve, and (b) a one-time approval you create on the server for that *exact* action with `approve.sh`. It expires after 30 minutes and works once. |
    | **NEVER** via Claude | format/wipe/partition, New Config, disk assignment, filesystem repair, array start/stop, OS upgrade, reading or deleting anything inside shares/disks/pools | Not implemented in the gate at all. The owner does these by hand. |
 
 3. **Explain before acting.** Before every CHANGE or DANGEROUS action Claude states what it does, why, the impact and downtime, and how to undo it. For DANGEROUS actions it then waits for the owner to approve.
@@ -40,8 +40,8 @@ Instructions in a plan only shape what Claude tries to do. These layers decide w
 
 | # | Layer | Where it runs | What it enforces | Can Claude change it? |
 |---|---|---|---|---|
-| 1 | **Server gate** (`server/gate.sh`) bound to the audit SSH key as a *forced command* with `restrict` | Unraid server, enforced by sshd | Whatever Claude sends, sshd runs the gate instead. The gate accepts only its named READ/CHANGE/DANGEROUS commands with validated arguments. There is no command that touches `/mnt` contents, raw disks or password/key files, and NEVER-tier actions aren't implemented. Secrets are redacted. CHANGE and DANGEROUS need the backup marker to be < 24 h old. DANGEROUS also needs a one-time, unexpired approval file that only `approve.sh` (run by the owner) creates; it's consumed on use. Config edits are backed up automatically. Forwarding and shells are disabled. Every request is logged to syslog (`claude-gate`: ALLOW / DENY / APPROVAL-USED / CHANGED). | No — no gate command writes to the gate, `approve.sh`, the approvals folder or the backup marker |
-| 2 | **Guard hook** (`.claude/hooks/guard.py`) | Workstation, run by Claude Code before every Bash/file tool call | Default-deny. Bash may only run `ssh unraid-audit <gate-command>` (same allowlist and tiers as the gate) or simple local text tools. No ssh options, other hosts, pipes after ssh, `;` `&&` redirects or substitutions. Refuses CHANGE/DANGEROUS when `.claude/backup-confirmed` is > 24 h old. Asks Claude Code to prompt the owner for every DANGEROUS call. File tools can't read `/mnt`, `/dev`, secrets or `~/.ssh` (`C:\Users\<you>\.ssh`), and can't write outside the project or into `.claude/`. Registered with `onFailure: "block"`: if Python is missing, the script can't start, crashes or times out, every guarded call is **refused**, not allowed. Understands Windows (`C:\…`) and Git Bash (`/c/…`) paths. | No — writes to `.claude/` are blocked |
+| 1 | **Server gate** (`server/gate.sh`) bound to the audit SSH key as a *forced command* with `restrict` | Unraid server, enforced by sshd | Whatever Claude sends, sshd runs the gate instead. The gate accepts only its named READ/CHANGE/DANGEROUS commands with validated arguments. There is no command that touches `/mnt` contents, raw disks or password/key files, and NEVER-tier actions aren't implemented. Secrets are redacted. DANGEROUS needs a one-time, unexpired approval file that only `approve.sh` (run by the owner) creates; it's consumed on use. Config edits are backed up automatically. Forwarding and shells are disabled. Every request is logged to syslog (`claude-gate`: ALLOW / DENY / APPROVAL-USED / CHANGED). | No — no gate command writes to the gate, `approve.sh` or the approvals folder |
+| 2 | **Guard hook** (`.claude/hooks/guard.py`) | Workstation, run by Claude Code before every Bash/file tool call | Default-deny. Bash may only run `ssh unraid-audit <gate-command>` (same allowlist and tiers as the gate) or simple local text tools. No ssh options, other hosts, pipes after ssh, `;` `&&` redirects or substitutions. Asks Claude Code to prompt the owner for every DANGEROUS call. File tools can't read `/mnt`, `/dev`, secrets or `~/.ssh` (`C:\Users\<you>\.ssh`), and can't write outside the project or into `.claude/`. Registered with `onFailure: "block"`: if Python is missing, the script can't start, crashes or times out, every guarded call is **refused**, not allowed. Understands Windows (`C:\…`) and Git Bash (`/c/…`) paths. | No — writes to `.claude/` are blocked |
 | 3 | **Sandbox** (OS-level) | — | **Not available on native Windows.** On Linux, macOS or WSL2 it can be switched back on (README "Other platforms"). Without it, local commands aren't network- or filesystem-isolated by the OS; the guard hook's default-deny list (only `ssh unraid-audit …` and a few text tools) carries that job. | — |
 | 4 | **Permission rules** (`settings.json`) | Workstation, enforced by Claude Code | `ssh unraid-audit *` is allowed. **Ask rules force a permission prompt for every DANGEROUS gate command.** Ask beats allow, and choosing "don't ask again" can't turn the prompt off. Backstop deny list (local destructive commands, `/mnt` paths, secrets, `approve.sh`, `scp`/`rsync`/`curl`, interpreters, local `docker`/`virsh`). Removes PowerShell (also switched off via `CLAUDE_CODE_USE_POWERSHELL_TOOL=0`), sub-agents and MCP tools. Denies `powershell`, `pwsh`, `cmd.exe`, `wsl`, `reg` and `schtasks` from Bash. Bypass and auto modes disabled, so prompts can't be skipped. | No — `.claude/` is protected |
 
@@ -100,22 +100,13 @@ ssh root@tower "tar -C /boot -czf - ." > ~/unraid-backups/unraid-flash-$(date +%
 3. **Second copy:** copy the file and its `.sha256` to a second location that isn't this server (another drive, NAS or cloud). That gives 3 copies: the flash and two exports.
 4. **Protect it:** it holds password hashes, SSH/WireGuard keys and the license. Encrypt it (e.g. a password-protected 7-Zip archive with AES-256) and keep it out of shared folders. On Windows, don't leave an unencrypted copy in a OneDrive/Dropbox-synced folder.
 5. **Record the disk map:** screenshot or print the **Main** tab showing each disk's slot, model and serial. Restoring an old backup after disks have been reassigned can overwrite data, so you need to know which disk was where.
-6. **Record it on the server** (creates the gate's marker file; do this after step 0.4 has created the folder, or create the folder now):
-   ```bash
-   mkdir -p /boot/config/claude-gate
-   echo "$(date -Is) file=<name> sha256=<hash> copies=<where> unraid=$(cat /etc/unraid-version)" > /boot/config/claude-gate/BACKUP-CONFIRMED
-   ```
-7. **Record it on the workstation** (unlocks the guard hook). In PowerShell, in the project folder:
-   ```powershell
-   "$(Get-Date -Format s) file=<name> sha256=<hash> copies=<where>" | Set-Content .claude\backup-confirmed
-   ```
-   Re-running this command refreshes the 24-hour clock.
+6. **Note it in the engagement log:** date, file name, SHA-256 hash, where the copies are, and the Unraid version. Then tell Claude the backup is done. Claude records it in the Initialization report (step 0.6) and won't start Phase 1 until you've confirmed it.
 
 **Restore notes (for reference)**
 - *Same flash drive is fine:* use the Unraid **USB Flash Creator** with the **Local Zip** option, or format the stick FAT32, label it `UNRAID`, extract the backup onto it and run `make_bootable` (`.bat` on Windows) as administrator.
 - *New flash drive:* the license is tied to the drive's GUID. Unraid asks for a license transfer on first boot, and the old drive gets blacklisted.
 - *Unraid Connect backup:* afterwards you must reset user passwords and regenerate WireGuard keys.
-- **Backup freshness is enforced:** CHANGE and DANGEROUS actions are refused once the backup record is more than 24 hours old. Before each day of changes, repeat 0.1 and refresh both records (server: re-run step 6; workstation: re-run step 7). READ commands keep working with an older backup.
+- **Before each day of changes, take a fresh backup** (repeat 0.1). This is a recommendation the plan relies on; nothing in the code checks it, so it's up to you and Claude's reminders.
 
 ### 0.2 Prepare the workstation (owner, Windows)
 The exact PowerShell commands are in **README §1**. In summary:
@@ -171,7 +162,6 @@ Host unraid-audit
    - `command=` forces the gate whatever the client asks for.
    - `restrict` turns off port/agent/X11 forwarding and terminals.
    - `from=` only accepts the key from the Windows PC's network IP (README §1 shows how to find it). Give the PC a DHCP reservation so it doesn't change.
-4. Make sure the backup marker from 0.1 step 6 exists.
 
 **How you approve a DANGEROUS action later.** From your own root session — the WebGUI terminal, or `ssh -t root@tower` with your normal login, never the audit key:
 ```bash
@@ -273,7 +263,7 @@ Each finding gets: ID/title, severity, evidence (gate command and redacted outpu
 
 ## Phase 4 — Changes
 
-**Before each day of changes:** a backup less than 24 hours old (repeat step 0.1 and refresh both records). The guard and gate refuse changes without it. Pre-check every time: array normal, no parity check, rebuild or mover run in progress (`var-ini`).
+**Before each day of changes:** take a fresh flash backup (repeat step 0.1). Claude asks you to confirm it before the first CHANGE or DANGEROUS action of the day. This isn't enforced in code. Pre-check every time: array normal, no parity check, rebuild or mover run in progress (`var-ini`).
 
 ### CHANGE tier — Claude proceeds on its own
 For each fix the owner has agreed to in Phase 3:
@@ -327,7 +317,7 @@ Final report (found / changed / deferred); inventory; change log; maintenance ch
 
 **Remove the audit access (owner):**
 - delete the audit key's line from `authorized_keys`
-- copy `/boot/config/claude-gate/backups/` somewhere safe if you want to keep the config history, then delete `/boot/config/claude-gate/` (gate, `approve.sh`, approvals, backups, marker)
+- copy `/boot/config/claude-gate/backups/` somewhere safe if you want to keep the config history, then delete `/boot/config/claude-gate/` (gate, `approve.sh`, approvals, config backups)
 - on the workstation, delete `C:\Users\<you>\.ssh\unraid_audit` and `unraid_audit.pub`, and the `Host unraid-audit` block in `C:\Users\<you>\.ssh\config`
 - confirm with `ssh unraid-audit help` → it must fail
 

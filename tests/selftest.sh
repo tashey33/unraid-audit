@@ -1,9 +1,8 @@
 #!/bin/bash
 # Self-test for the audit guard rails. Runs entirely on the workstation: it
-# never connects to the server. It only writes inside a temporary folder and
-# temporarily swaps .claude/backup-confirmed (restored at the end).
+# never connects to the server. It only writes inside a temporary folder.
 #   1. guard.py   — sample tool calls → allow (0) / prompt (0 + "ask") / block (2)
-#   2. gate.sh    — dry-run decisions, tiers, approvals, expiry, freshness
+#   2. gate.sh    — dry-run decisions, tiers, approvals, expiry
 #   3. gate.sh    — real config edit + automatic backup + restore on a temp copy
 # Usage (from the project folder):
 #   Linux/macOS/WSL/Git Bash:  bash tests/selftest.sh
@@ -46,17 +45,13 @@ gate() {      # expect(allow|deny) request [extra env...]
 }
 approve() { echo YES | bash "$APPROVE" "$@" >/dev/null 2>&1; }
 
-MARK=".claude/backup-confirmed"
-[ -f "$MARK" ] && mv "$MARK" "$MARK.selftest"
-SMARK="$TMP/BACKUP-CONFIRMED"; export GATE_MARKER="$SMARK"
+echo "== no backup record is needed (the backup is a plan instruction, not enforced)"
+bash_ok "ssh unraid-audit uptime"
+bash_ok "ssh unraid-audit docker-restart plex"
+bash_ask "ssh unraid-audit docker-remove plex"
+gate allow uptime
+gate allow "docker-restart plex"
 
-echo "== step 0.1 not done: only 'help' works"
-bash_ok "ssh unraid-audit help"
-bash_no "ssh unraid-audit uptime"
-gate allow help
-gate deny uptime
-
-touch "$MARK" "$SMARK"
 echo "== guard.py: READ and CHANGE allowed, DANGEROUS prompts"
 for c in help "smart-all /dev/sda" "smart-all /dev/nvme0n1" "syslog-tail 500" "cfg ident.cfg" \
          "btrfs-usage cache" "docker-restart plex" "vm-stop Windows11" "vm-autostart Windows11 off" \
@@ -86,19 +81,10 @@ tool_no Grep  '{"pattern":"x","path":"/mnt/disk1"}'
 tool_no Glob  '{"pattern":"/mnt/**/*.jpg"}'
 tool_no Write '{"file_path":"/etc/hosts","content":"x"}'
 tool_no Edit  '{"file_path":".claude/settings.json","old_string":"a","new_string":"b"}'
-tool_no Write '{"file_path":".claude/backup-confirmed","content":"x"}'
+tool_no Write '{"file_path":".claude/anything.txt","content":"x"}'
 tool_no Write '{"file_path":".claude/hooks/guard.py","content":"x"}'
 tool_no PowerShell '{"command":"Get-ChildItem"}'
 printf 'not json' | $PY "$GUARD" >/dev/null 2>&1; [ $? = 2 ] && ok || bad "hook: bad input should fail closed"
-
-echo "== stale backup (> 24h): READ ok, CHANGE/DANGEROUS refused"
-touch -d '2 days ago' "$MARK" "$SMARK"
-bash_ok "ssh unraid-audit uptime"
-bash_no "ssh unraid-audit docker-restart plex"
-bash_no "ssh unraid-audit docker-remove plex"
-gate allow uptime
-gate deny "docker-restart plex"
-touch "$MARK" "$SMARK"
 
 echo "== gate.sh: READ and CHANGE (dry run)"
 for r in help version lsblk "smart-all /dev/sda" "cfg ident.cfg" "share-cfg appdata" "docker-inspect plex" \
@@ -170,8 +156,6 @@ grep -qx 'USE_SSH="no"' "$CR/ident.cfg" && ok || bad "approved cfg-set did not a
 echo "== guard.py: Windows path handling (simulated)"
 if $PY tests/guard_windows_sim.py .claude/hooks/guard.py; then ok; else bad "Windows path simulation"; fi
 
-# ---------- restore marker state
-rm -f "$MARK"; [ -f "$MARK.selftest" ] && mv "$MARK.selftest" "$MARK"
 echo
 echo "passed: $pass   failed: $fail"
 [ "$fail" = 0 ]

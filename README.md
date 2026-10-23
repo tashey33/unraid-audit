@@ -19,11 +19,11 @@ These rules are **enforced in code**, not just written down. The full engagement
 | Approval helper | `server/approve.sh` | Unraid (owner's own root session only) | Creates a one-time, 30-minute approval for one exact DANGEROUS request |
 | Guard hook | `.claude/hooks/guard.py` | Windows workstation (Claude Code PreToolUse hook) | Default-deny check on every command and file access. Mirrors the gate's allowlist and tiers. Prompts on DANGEROUS. **Fail-closed:** if it can't run, everything is blocked. |
 | Permissions | `.claude/settings.json` | Windows workstation (Claude Code) | Ask rules for DANGEROUS. Backstop deny rules (incl. PowerShell/cmd/wsl from Bash). PowerShell tool, sub-agents and MCP tools off. Bypass/auto modes disabled. |
-| Self-test | `tests/selftest.sh` | Workstation (Git Bash) | 158 offline checks (incl. a Windows path simulation) that the guards allow, prompt and refuse what they should |
+| Self-test | `tests/selftest.sh` | Workstation (Git Bash) | 154 offline checks (incl. a Windows path simulation) that the guards allow, prompt and refuse what they should |
 
 **Workstation:** native Windows with Claude Code and Git for Windows. Claude Code's OS sandbox isn't available on native Windows, so it's off. The guard hook and the server gate carry that job; see `plan.md` §0.1 "Honest limits". For Linux, macOS or WSL2, see [Other platforms](#other-platforms).
 
-Nothing runs against the server until the owner has **exported a flash (OS) backup to another machine** (plan step 0.1). Changes stop being allowed once that backup is more than 24 hours old.
+**Backups:** the plan tells you to export a flash (OS) backup to another machine before anything else (step 0.1), and again before each day of changes. Claude asks you to confirm it. This is an instruction only; the code doesn't check for it.
 
 ---
 
@@ -44,7 +44,7 @@ unraid-audit/
 └── tests/selftest.sh         ← offline self-test
 ```
 
-The repo contains **no secrets**: no keys, tokens, IPs or backup records. `.gitignore` keeps local state out (`.claude/backup-confirmed`, `.claude/settings.local.json`, `notes/`).
+The repo contains **no secrets**: no keys, tokens, IPs or backup records. `.gitignore` keeps local state out (`.claude/settings.local.json`, `notes/`).
 
 ---
 
@@ -78,7 +78,7 @@ cd unraid-audit
 ```powershell
 & "$env:ProgramFiles\Git\bin\bash.exe" tests/selftest.sh
 ```
-The last line must be `passed: 158   failed: 0`.
+The last line must be `passed: 154   failed: 0`.
 
 **4. Find this PC's network IP.** You'll need it for `from=` in plan step 0.4.
 ```powershell
