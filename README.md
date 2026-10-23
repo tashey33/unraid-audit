@@ -152,7 +152,34 @@ Server-specific settings at the top of `gate.sh` (`CRITICAL_NAMES`, `ENABLE_PARI
 
 ---
 
-## 4. Removing everything
+## 4. Change rules for this repository
+
+**No direct commits to `main`.** Every change goes through a pull request and must be approved by the owner (`@tashey33`), including Claude's changes.
+
+| File | Purpose |
+|---|---|
+| `.github/rulesets/protect-main.json` | Branch ruleset for `main`. Requires a pull request with 1 approval from the code owner. New pushes invalidate earlier approvals, and the latest push must be approved by someone other than the person who pushed it. All review threads must be resolved. Force-pushes and deleting `main` are blocked. |
+| `.github/CODEOWNERS` | Makes `@tashey33` the required reviewer for every file |
+
+**Apply the ruleset (owner, once).** GitHub only enforces it after it's applied in the repo settings; the file on its own does nothing.
+- *Web:* **Settings → Rules → Rulesets → New ruleset → Import a ruleset** → choose `.github/rulesets/protect-main.json` → **Create**.
+- *CLI* (from a checkout, logged in with `gh auth login` as the owner):
+  ```bash
+  gh api -X POST repos/tashey33/unraid-audit/rulesets --input .github/rulesets/protect-main.json
+  ```
+- *Check it:* **Settings → Rules → Rulesets** shows `protect-main` as **Active**. A direct `git push origin main` is now rejected.
+
+**How changes flow:**
+1. Work on a branch: `git switch -c fix/something`
+2. Push it and open a pull request: `git push -u origin fix/something`, then `gh pr create`.
+3. **Claude's PRs:** the owner reviews and approves, then merges. Claude can't approve or merge its own PRs.
+4. **The owner's own PRs:** GitHub doesn't let anyone approve their own PR. The ruleset therefore lets the repository admin (the owner) bypass the approval **only through a pull request**. You still open a PR and merge it yourself. Nobody, including you, can push straight to `main`.
+
+**Plan note:** on a **private** repo with a free personal account, GitHub may not enforce rulesets. In that case either upgrade to GitHub Pro or make the repo public; the contents are designed to hold no secrets.
+
+---
+
+## 5. Removing everything
 
 From your own root session on Unraid:
 - delete the audit key's line from `/boot/config/ssh/root/authorized_keys`
