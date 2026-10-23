@@ -8,7 +8,6 @@ shim = types.SimpleNamespace(path=ntpath, name="nt", environ=os.environ, getcwd=
 g.os = shim; g.IS_WINDOWS = True
 g.HOME = ntpath.expanduser("~")
 g.PROTECTED_READ = [p for p in g.PROTECTED_READ if p.startswith("/")] + [ntpath.join(g.HOME, ".ssh")]
-g.backup_age_hours = lambda: 0.0
 def run(tool, ti, cwd="C:\\code\\unraid-audit"):
     sys.stdin = types.SimpleNamespace(buffer=io.BytesIO(json.dumps({"tool_name":tool,"tool_input":ti,"cwd":cwd}).encode()))
     out = io.StringIO(); so = sys.stdout; sys.stdout = out; err = io.StringIO(); se = sys.stderr; sys.stderr = err
@@ -41,7 +40,7 @@ cases = [
  ("Write", {"file_path": r"c:\CODE\Unraid-Audit\notes\r.md"}, 0),
  ("Write", {"file_path": r"C:\code\unraid-audit\.claude\settings.json"}, 2),
  ("Edit",  {"file_path": "/c/code/unraid-audit/.claude/hooks/guard.py"}, 2),
- ("Write", {"file_path": r"C:\code\unraid-audit\.CLAUDE\backup-confirmed"}, 2),
+ ("Write", {"file_path": r"C:\code\unraid-audit\.CLAUDE\anything.txt"}, 2),
  ("Write", {"file_path": r"C:\Windows\System32\drivers\etc\hosts"}, 2),
  ("Write", {"file_path": r"D:\elsewhere\x.txt"}, 2),
  ("Write", {"file_path": r"C:\code\unraid-audit\..\other\x.txt"}, 2),

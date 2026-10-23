@@ -17,9 +17,9 @@ Policy (default-deny):
         options, no pipes, nothing chained. The command and arguments must be on
         the same allowlist the server gate enforces (keep GATE in sync with
         server/gate.sh).
-          READ       runs once the owner has recorded the step-0.1 backup.
-          CHANGE     also needs that backup record to be < MAX_BACKUP_AGE_H old.
-          DANGEROUS  same, and this hook asks Claude Code to prompt the owner
+          READ       runs freely.
+          CHANGE     runs freely (reversible).
+          DANGEROUS  this hook asks Claude Code to prompt the owner
                      (settings.json also has ask rules for these). The server
                      gate additionally requires the owner's one-time approval.
       - a short list of local read-only text tools (ls, cat, grep, ...) joined
@@ -36,11 +36,8 @@ import os
 import re
 import shlex
 import sys
-import time
 
 HOST_ALIAS = "unraid-audit"
-MAX_BACKUP_AGE_H = 24
-BACKUP_MARKER = ""  # set in main()
 
 DEV = r"/dev/(sd[a-z]{1,3}|nvme[0-9]{1,2}(n[0-9]{1,2})?)"
 NAME = r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}"
@@ -197,12 +194,6 @@ def gate_tier(args: list) -> str:
     return tier
 
 
-def backup_age_hours() -> float:
-    if not os.path.isfile(BACKUP_MARKER):
-        return float("inf")
-    return (time.time() - os.path.getmtime(BACKUP_MARKER)) / 3600
-
-
 def check_bash(command: str, cwd: str) -> None:
     if under(norm(cwd, "/"), "/mnt") or under(norm(cwd, "/"), "/boot"):
         block("commands may not run from inside /mnt or /boot")
@@ -241,15 +232,6 @@ def check_bash(command: str, cwd: str) -> None:
             block(f"ssh is only allowed as 'ssh {HOST_ALIAS} <gate-command>' (no options, no other hosts)")
         req = first[2:]
         tier = gate_tier(req)
-        if req == ["help"]:
-            return
-        age = backup_age_hours()
-        if age == float("inf"):
-            block("initialization step 0.1 not done: the owner must export a flash backup to another "
-                  "machine and record it in .claude/backup-confirmed before any server command runs")
-        if tier in (C, D) and age > MAX_BACKUP_AGE_H:
-            block(f"changes need a flash backup from the last {MAX_BACKUP_AGE_H}h: the owner repeats "
-                  "step 0.1 and updates .claude/backup-confirmed (and the server marker)")
         if tier == D:
             ask(f"DANGEROUS: '{' '.join(req)}'. Approve only if you asked for this exact action. "
                 f"The server also needs your one-time approval: bash /boot/config/claude-gate/approve.sh {' '.join(req)}")
@@ -283,11 +265,10 @@ def check_write_path(path: str, cwd: str, project: str) -> None:
     if not under(p, proj):
         block(f"writes are only allowed inside the project folder ({proj})")
     if under(p, os.path.join(proj, ".claude")):
-        block("the .claude folder (settings, this guard, backup record) can't be changed by Claude")
+        block("the .claude folder (settings and this guard) can't be changed by Claude")
 
 
 def main() -> None:
-    global BACKUP_MARKER
     try:  # Windows consoles default to a legacy code page; keep messages readable
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
@@ -297,9 +278,6 @@ def main() -> None:
     ti = data.get("tool_input") or {}
     cwd = native(data.get("cwd") or os.getcwd())
     project = native(os.environ.get("CLAUDE_PROJECT_DIR") or cwd)
-    # Created by the OWNER after step 0.1. Claude can't create or touch it:
-    # writes into .claude/ are blocked below and Bash has no write-capable tools.
-    BACKUP_MARKER = os.path.join(os.path.realpath(project), ".claude", "backup-confirmed")
 
     if tool == "Bash":
         check_bash(str(ti.get("command", "")), cwd)

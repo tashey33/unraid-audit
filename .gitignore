@@ -1,5 +1,4 @@
 # local state — never commit
-.claude/backup-confirmed
 .claude/settings.local.json
 notes/
 *.selftest
